@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use pnet::datalink::Channel::Ethernet;
 use pnet::packet::Packet;
 use pnet::packet::arp::{ArpOperations, ArpPacket};
 use pnet::packet::ethernet::{EtherTypes, EthernetPacket};
+use std::error::Error;
 
 use crate::utils::{
     get_interface_by_name, get_local_mac_by_interface, get_network_by_interface,
@@ -15,26 +17,24 @@ use crate::utils::{
 
 mod utils;
 
-fn main() {
+fn main() ->  Result<(), Box<dyn Error>> {
     let ipmac_table = Arc::new(Mutex::new(HashMap::new()));
     let table_for_thread = ipmac_table.clone();
     // get interface name from commad line args
-    let iface_name = std::env::args().nth(1).expect("Specify interface name");
+    let iface_name = std::env::args().nth(1).ok_or("Specify interface name")?;
 
-    let iface = get_interface_by_name(&iface_name).expect("Cannot find interface with that name");
-    let local_mac = get_local_mac_by_interface(&iface).expect("Cannot get MAC address");
+    let iface = get_interface_by_name(&iface_name).ok_or("Cannot find interface with specified name")?;
+    let local_mac = get_local_mac_by_interface(&iface).ok_or("Cannot get your MAC adress")?;
 
-    let ipv4_network = get_network_by_interface(&iface).expect("Cannot find Ipv4Network");
+    let ipv4_network = get_network_by_interface(&iface).ok_or("Cannot get ipv4 network")?;
     let local_ip = ipv4_network.ip();
-    println!("{:?}", local_ip);
     // get ip range
-    let usable_ips = get_usable_ips_by_network(&ipv4_network).expect("Cannot get usable ips");
-    println!("MAC {:?}", local_mac);
+    let usable_ips = get_usable_ips_by_network(&ipv4_network).ok_or("Cannot get ips in your network")?;
 
     let (mut tx, mut rx) = match datalink::channel(&iface, Default::default()) {
         Ok(Ethernet(tx, rx)) => (tx, rx),
-        Ok(_) => panic!("Unhandled channel type"),
-        Err(e) => panic!("Error: {}", e),
+        Ok(_) => return Err("Unhandled channel type".into()),
+        Err(e) => return Err("Error constructing tx rx channels".into()),
     };
 
     // RECEIVE IN THREAD
@@ -43,6 +43,8 @@ fn main() {
             match rx.next() {
                 Ok(packet) => {
                     let eth_packet = EthernetPacket::new(packet).unwrap();
+
+
 
                     if eth_packet.get_ethertype() == EtherTypes::Arp {
                         if let Some(arp_packet) = ArpPacket::new(eth_packet.payload()) {
@@ -77,4 +79,6 @@ fn main() {
         println!("ip: {}", ip_mac.0);
         println!("\tmac: {}", ip_mac.1)
     }
+
+    Ok(())
 }
