@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use indicatif::ProgressBar;
 
 use pnet::datalink;
 use pnet::datalink::Channel::Ethernet;
@@ -17,19 +18,21 @@ use crate::utils::{
 
 mod utils;
 
-fn main() ->  Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let ipmac_table = Arc::new(Mutex::new(HashMap::new()));
     let table_for_thread = ipmac_table.clone();
     // get interface name from commad line args
     let iface_name = std::env::args().nth(1).ok_or("Specify interface name")?;
 
-    let iface = get_interface_by_name(&iface_name).ok_or("Cannot find interface with specified name")?;
+    let iface =
+        get_interface_by_name(&iface_name).ok_or("Cannot find interface with specified name")?;
     let local_mac = get_local_mac_by_interface(&iface).ok_or("Cannot get your MAC adress")?;
 
     let ipv4_network = get_network_by_interface(&iface).ok_or("Cannot get ipv4 network")?;
     let local_ip = ipv4_network.ip();
     // get ip range
-    let usable_ips = get_usable_ips_by_network(&ipv4_network).ok_or("Cannot get ips in your network")?;
+    let usable_ips =
+        get_usable_ips_by_network(&ipv4_network).ok_or("Cannot get ips in your network")?;
 
     let (mut tx, mut rx) = match datalink::channel(&iface, Default::default()) {
         Ok(Ethernet(tx, rx)) => (tx, rx),
@@ -43,8 +46,6 @@ fn main() ->  Result<(), Box<dyn Error>> {
             match rx.next() {
                 Ok(packet) => {
                     let eth_packet = EthernetPacket::new(packet).unwrap();
-
-
 
                     if eth_packet.get_ethertype() == EtherTypes::Arp {
                         if let Some(arp_packet) = ArpPacket::new(eth_packet.payload()) {
@@ -65,19 +66,21 @@ fn main() ->  Result<(), Box<dyn Error>> {
         }
     });
     // send arp packet to all hosts in ips range;
+    println!("Sending arp discovery...");
+    let bar = ProgressBar::new(usable_ips.len() as u64);
     for ip in usable_ips {
+        bar.inc(1);
         send_arp_discovery(&mut *tx, ip, local_ip, local_mac);
-        std::thread::sleep(Duration::from_millis(30));
+        std::thread::sleep(Duration::from_millis(10));
     }
-    std::thread::sleep(Duration::from_secs(20));
+    std::thread::sleep(Duration::from_secs(10));
     // rcv_thread.join().unwrap();
 
     let final_table = ipmac_table.lock().unwrap();
 
     println!("Found hosts:");
-    for ip_mac in final_table.iter() {
-        println!("ip: {}", ip_mac.0);
-        println!("\tmac: {}", ip_mac.1)
+    for (ip, mac) in final_table.iter() {
+        println!("IP:{:<15} MAC: {}", ip, mac);
     }
 
     Ok(())
